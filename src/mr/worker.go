@@ -5,8 +5,9 @@ import (
 	"hash/fnv"
 	"log"
 	"net/rpc"
-	"errors"
 	"io/ioutil"
+	"encoding/json"
+	"os"
 )
 
 //
@@ -31,42 +32,63 @@ func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
 	// TODO Your worker implementation here.
-	mapCompleted := false
-	var previousFileResult []KeyValue
-	for (!mapCompleted) {
-		filename, err := GetJob(previousFileResult)
-		if err == nil {
-			previousFileResult = ParseFile(filename, mapf)
-		} else {
-			fmt.Println(err)
-			mapCompleted = true
+	prevJob := -1
+	for {
+		job, mapCompleted, nReduce := GetJob(prevJob)
+		fmt.Println("LLLLLLLLLLLLLLLLLL",job, mapCompleted, nReduce)
+		if mapCompleted {
+			break
 		}
+		prevJob = ParseFile(job, nReduce, mapf)
 	}
 }
 
-// GetJob retrieve a filename from the master and parse it
-func GetJob(previousFileResult []KeyValue) (string, error) {
-	// declare an argument structure.
-	args := MRRequest{X:previousFileResult}
-	
-	// declare a reply structure.
+// GetJob retrieve a filename from the master.
+func GetJob(previousJob int) (Job, bool, int) {
+	args := MRRequest{PrevCompletedJob: previousJob}
 	reply := MRReply{}
 	
 	// send the RPC request, wait for the reply.
-	if call("Master.Example", &args, &reply) {
-		return reply.Y, nil
-	} else {
-		return "", errors.New("NO MORE JOB")
-	}
+	call("Master.RequestMapJob", &args, &reply)
+	return reply.Job, reply.MapStageCompleted, reply.NReduce
 }
 
-func ParseFile(filename string, mapf func(string, string) []KeyValue) []KeyValue {
-	fmt.Println("filename: ", filename)
+// ParseFile returns the id of the last successful job. If unsuccessful, job will return -1.
+func ParseFile(job Job, nReduce int, mapf func(string, string) []KeyValue) int {
+	filename, jobId := job.Filename, job.JobId
+	fmt.Println(" parsing filename: ", filename)
 	content, err := ioutil.ReadFile(filename)
 	if err != nil {
-		return []KeyValue{}
+		fmt.Println("File not found error!: ", filename)
+		return -1
 	}
-	return mapf(filename, string(content))
+
+	table := make(map[int][]KeyValue)
+	
+	kvs := mapf(filename, string(content))
+	for _, kv := range kvs {
+		reduceId := ihash(kv.Key) % nReduce
+		table[reduceId] = append(table[reduceId], kv)
+	}
+
+	for id, kvs := range table {
+		reduceFile := generateReduceFileName(jobId, id)
+		b, err := json.Marshal(kvs)
+		if err != nil {
+			return -1
+		}
+		if ioutil.WriteFile(reduceFile, b, 0644) != nil {
+			return -1
+		}
+	}
+
+	return job.JobId
+}
+
+func generateReduceFileName(jobId int, reduceId int) string {
+	filename := fmt.Sprintf("mr-%d-%d", jobId, reduceId)
+	os.Create(filename)
+	return filename
 }
 
 //

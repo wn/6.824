@@ -5,11 +5,14 @@ package mr
 //
 
 type MRRequest struct {
-	X []KeyValue
+	PrevCompletedJob int
 }
 
+// master assign filename and jobId to slave.
 type MRReply struct {
-	Y string
+	Job Job
+	MapStageCompleted bool
+	NReduce int
 }
 
 // Add your RPC definitions here.
