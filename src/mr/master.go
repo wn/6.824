@@ -5,10 +5,19 @@ import "net"
 import "os"
 import "net/rpc"
 import "net/http"
-
+import "fmt"
+import "errors"
 
 type Master struct {
 	// Your definitions here.
+	
+	// list of available workers
+	// list of work
+	works []string
+	jobCounter int
+	jobCompleted int
+
+	resultTable map[string][]string
 
 }
 
@@ -17,9 +26,17 @@ type Master struct {
 //
 // an example RPC handler.
 //
-func (m *Master) Example(args *ExampleArgs, reply *ExampleReply) error {
-	reply.Y = args.X + 1
+func (m *Master) Example(args *MRRequest, reply *MRReply) error {
+	if m.jobCounter == len(m.works) {
+		return errors.New("No more job")
+	}
+	reply.Y = m.works[m.jobCounter]
+	m.jobCounter++
 	return nil
+}
+
+func (m *Master) GetWorkerResult(args *MRRequest, reply *MRReply) {
+	m.jobCompleted++
 }
 
 
@@ -43,12 +60,7 @@ func (m *Master) server() {
 // if the entire job has finished.
 //
 func (m *Master) Done() bool {
-	ret := false
-
-	// Your code here.
-
-
-	return ret
+	return m.jobCompleted == len(m.works)
 }
 
 //
@@ -57,8 +69,10 @@ func (m *Master) Done() bool {
 func MakeMaster(files []string, nReduce int) *Master {
 	m := Master{}
 
-	// Your code here.
+	m.works = files
+	m.server()
 
+	fmt.Println(nReduce)
 
 	return &m
 }

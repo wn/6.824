@@ -1,10 +1,13 @@
 package mr
 
-import "fmt"
-import "log"
-import "net/rpc"
-import "hash/fnv"
-
+import (
+	"fmt"
+	"hash/fnv"
+	"log"
+	"net/rpc"
+	"errors"
+	"io/ioutil"
+)
 
 //
 // Map functions return a slice of KeyValue.
@@ -24,36 +27,46 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
-
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
 
-	// Your worker implementation here.
-
-	// uncomment to send the Example RPC to the master.
-	// CallExample()
-
+	// TODO Your worker implementation here.
+	mapCompleted := false
+	var previousFileResult []KeyValue
+	for (!mapCompleted) {
+		filename, err := GetJob(previousFileResult)
+		if err == nil {
+			previousFileResult = ParseFile(filename, mapf)
+		} else {
+			fmt.Println(err)
+			mapCompleted = true
+		}
+	}
 }
 
-//
-// example function to show how to make an RPC call to the master.
-//
-func CallExample() {
-
+// GetJob retrieve a filename from the master and parse it
+func GetJob(previousFileResult []KeyValue) (string, error) {
 	// declare an argument structure.
-	args := ExampleArgs{}
-
-	// fill in the argument(s).
-	args.X = 99
-
+	args := MRRequest{X:previousFileResult}
+	
 	// declare a reply structure.
-	reply := ExampleReply{}
-
+	reply := MRReply{}
+	
 	// send the RPC request, wait for the reply.
-	call("Master.Example", &args, &reply)
+	if call("Master.Example", &args, &reply) {
+		return reply.Y, nil
+	} else {
+		return "", errors.New("NO MORE JOB")
+	}
+}
 
-	// reply.Y should be 100.
-	fmt.Printf("reply.Y %v\n", reply.Y)
+func ParseFile(filename string, mapf func(string, string) []KeyValue) []KeyValue {
+	fmt.Println("filename: ", filename)
+	content, err := ioutil.ReadFile(filename)
+	if err != nil {
+		return []KeyValue{}
+	}
+	return mapf(filename, string(content))
 }
 
 //
@@ -62,7 +75,7 @@ func CallExample() {
 // returns false if something goes wrong.
 //
 func call(rpcname string, args interface{}, reply interface{}) bool {
-	// c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":1234")
+	// \c, err := rpc.DialHTTP("tcp", "127.0.0.1"+":1234")
 	c, err := rpc.DialHTTP("unix", "mr-socket")
 	if err != nil {
 		log.Fatal("dialing:", err)

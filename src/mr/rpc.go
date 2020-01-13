@@ -4,17 +4,12 @@ package mr
 // RPC definitions.
 //
 
-//
-// example to show how to declare the arguments
-// and reply for an RPC.
-//
-
-type ExampleArgs struct {
-	X int
+type MRRequest struct {
+	X []KeyValue
 }
 
-type ExampleReply struct {
-	Y int
+type MRReply struct {
+	Y string
 }
 
 // Add your RPC definitions here.
