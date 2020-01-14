@@ -40,11 +40,9 @@ func ihash(key string) int {
 
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
-
+		fmt.Println("Worker starting map stage!")
 		workerMapStage(mapf)
-		// TODO reduce stage.
-
-		fmt.Println("Starting reduce stage!")
+		fmt.Println("Worker starting reduce stage!")
 		workerReduceStage(reducef)
 }
 
@@ -69,6 +67,7 @@ func getReduceJob(prevJob int) (int, bool) {
 	return reply.ReduceJob, reply.ReduceStageCompleted
 }
 func parseReduceFile(reduceID int, reducef func(string, []string) string) int {
+	print("Starting reduce job")
 	intermediateFileFormat := fmt.Sprintf("*-%d", reduceID)
 	files, err := filepath.Glob(intermediateFileFormat)
 	if err != nil {
@@ -78,14 +77,17 @@ func parseReduceFile(reduceID int, reducef func(string, []string) string) int {
 	for _, file := range files {
 		content, err := ioutil.ReadFile(file)
 		result := []KeyValue{}
-		if err != nil || json.Unmarshal(content, &result) != nil {
+		if err != nil {
 			return -1
+		}
+		if res := json.Unmarshal(content, &result); res != nil {
+			fmt.Println("something fucked up", res)
+			fmt.Println("Reduce job %d failed", reduceID)
 		}
 		intermediate = append(intermediate, result...)
 	}
 
 	sort.Sort(ByKey(intermediate))
-
 	oname := fmt.Sprintf("mr-out-%d", reduceID)
 	ofile, _ := os.Create(oname)
 
@@ -112,7 +114,7 @@ func parseReduceFile(reduceID int, reducef func(string, []string) string) int {
 	}
 
 	ofile.Close()
-
+	fmt.Printf("Reduce job %d completed\n", reduceID)
 	return reduceID
 }
 
@@ -158,7 +160,8 @@ func parseMapFile(job Job, nReduce int, mapf func(string, string) []KeyValue) in
 	for id, kvs := range table {
 		reduceFilename := generateIntermediateFileName(jobID, id)
 		b, err := json.Marshal(kvs)
-		if err != nil || ioutil.WriteFile(reduceFilename, b, 0644) != nil {
+		if err != nil || ioutil.WriteFile(reduceFilename, b, 0666) != nil {
+			fmt.Println(err, "ORRORORRO")
 			return -1
 		}
 	}
@@ -168,6 +171,7 @@ func parseMapFile(job Job, nReduce int, mapf func(string, string) []KeyValue) in
 
 func generateIntermediateFileName(jobID int, reduceID int) string {
 	filename := fmt.Sprintf("mr-%d-%d", jobID, reduceID)
+	os.Remove(filename)
 	os.Create(filename)
 	return filename
 }
