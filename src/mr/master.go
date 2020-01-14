@@ -8,7 +8,7 @@ import "net/http"
 import "fmt"
 import "time"
 
-var timeout int = 5
+var timeout time.Duration = 5
 
 type Job struct {
 	Filename string
@@ -16,43 +16,88 @@ type Job struct {
 }
 
 type Master struct {
-	nReduce int
-	c chan Job
-	mapCompletedCount chan int
-	
-	mapJobStatus map[int]bool
-	mapJobCompleted int
-	jobCount int
+	nReduce 			int
+
+	// Map stage
+	c 					chan Job
+	mapCompletedCount 	chan int // TODO use a better way to use atomic counter
+	mapJobStatus 		map[int]bool
+	jobCount 			int
+
+	// Reduce stage
+	reduceJobs			chan int
+	reduceCompletedCount chan int // TODO use a better way to use atomic counter
+	reduceJobStatus 		map[int]bool
 }
 
-// Your code here -- RPC handlers for the worker to call.
+//
+// Map RPC handler.
+//
+func (m *Master) RequestReduceJob(req *MRRequest, reply *RReply) error {
+	if prevJob := req.PrevCompletedJob; prevJob != -1 {
+		m.reduceJobStatus[prevJob] = true
+	}
+	for {
+		select { 
+		case reduceJob, ok := <-m.reduceJobs:
+			if ok {
+				fmt.Printf("Value %v was read.\n", reduceJob)
+				reply.ReduceJob= reduceJob
+				// if after timeout, resend work
+				go func(reduceJob int, m *Master) {
+					time.Sleep(timeout * time.Second)
+					if m.reduceJobStatus[reduceJob] {
+						m.reduceCompletedCount <- 1
+						if len(m.reduceCompletedCount) >= m.jobCount { // scary part as we didnt mutex this, but reducecount can never go above jobcount.
+							fmt.Println("Closing channel!")
+							// TODO we can consider clearing master resources for use in reduce.
+							close(m.reduceJobs)
+						 }
+					 } else {
+						m.reduceJobs <- reduceJob
+					 }
+				}(reduceJob, m)
+				return nil
+			} else {
+				fmt.Println("Channel closed!")
+				// Signal to slaves to end Map Stage.
+				reply.ReduceStageCompleted = true
+				return nil
+			}
+		default:
+			fmt.Println("No value ready, moving on.")
+			time.Sleep(3 * time.Second) // Sleep so that we don't waste compute power.
+		}
+	}
+	return nil
+}
 
 //
-// an example RPC handler.
+// Reduce RPC handler.
 //
 func (m *Master) RequestMapJob(req *MRRequest, reply *MRReply) error {
+	// TODO write reduce job. Very similar to above.
+
 	if req.PrevCompletedJob != -1 {
 		m.mapJobStatus[req.PrevCompletedJob] = true
 	}
 	for {
+		// Code below copied from: 
 		// https://stackoverflow.com/questions/3398490/checking-if-a-channel-has-a-ready-to-read-value-using-go
 		select { 
 		case job, ok := <-m.c:
-			
 			if ok {
 				fmt.Printf("Value %v was read.\n", job)
-				reply.Job = job
-				reply.NReduce = m.nReduce
+				reply.Job, reply.NReduce = job, m.nReduce
 				// if after timeout, resend work
 				go func(job Job, m *Master) {
-					time.Sleep(2 * time.Second)
-					fmt.Println("LL", len(m.mapJobStatus))
+					time.Sleep(timeout * time.Second)
 					if m.mapJobStatus[job.JobId] {
-						// TODO race
 						m.mapCompletedCount <- 1
-						fmt.Println("LL", len(m.mapCompletedCount))
 						if len(m.mapCompletedCount) >= m.jobCount {
-							 close(m.c)
+							fmt.Println("Closing channel!")
+							// TODO we can consider clearing master resources for use in reduce.
+							close(m.c)
 						 }
 					 } else {
 						m.c <- job
@@ -61,17 +106,17 @@ func (m *Master) RequestMapJob(req *MRRequest, reply *MRReply) error {
 				return nil
 			} else {
 				fmt.Println("Channel closed!")
+				// Signal to slaves to end Map Stage.
 				reply.MapStageCompleted = true
 				return nil
 			}
 		default:
 			fmt.Println("No value ready, moving on.")
-			time.Sleep(3 * time.Second)
+			time.Sleep(3 * time.Second) // Sleep so that we don't waste compute power.
 		}
 	}
 	return nil
 }
-
 
 //
 // start a thread that listens for RPCs from worker.go
@@ -93,6 +138,7 @@ func (m *Master) server() {
 // if the entire job has finished.
 //
 func (m *Master) Done() bool {
+	// TODO
 	return len(m.mapCompletedCount) >= m.jobCount
 }
 
@@ -100,7 +146,6 @@ func (m *Master) Done() bool {
 // create a Master.
 //
 func MakeMaster(files []string, nReduce int) *Master {
-	fmt.Println(nReduce)
 	m := Master{
 		c: make(chan Job, len(files)),
 		nReduce: nReduce,
@@ -108,9 +153,15 @@ func MakeMaster(files []string, nReduce int) *Master {
 		jobCount: len(files),
 		mapCompletedCount: make(chan int, len(files)),
 	}
+
+	// Set up work for map stage.
 	for id, file := range files {
 		m.c <- Job{Filename: file, JobId: id}
-		fmt.Println(id, file)
+	}
+
+	// Let up work for reduce stage
+	for i := 0; i < nReduce; i++ {
+		m.reduceJobs <- i
 	}
 
 	m.server()

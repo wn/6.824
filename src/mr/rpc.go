@@ -15,5 +15,8 @@ type MRReply struct {
 	NReduce int
 }
 
-// Add your RPC definitions here.
+type RReply struct {
+	ReduceJob int
+	ReduceStageCompleted bool
+}
 
