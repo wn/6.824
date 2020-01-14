@@ -8,7 +8,17 @@ import (
 	"io/ioutil"
 	"encoding/json"
 	"os"
+	"path/filepath"
+	"sort"
 )
+
+// for sorting by key.
+type ByKey []KeyValue
+
+// for sorting by key.
+func (a ByKey) Len() int           { return len(a) }
+func (a ByKey) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
+func (a ByKey) Less(i, j int) bool { return a[i].Key < a[j].Key }
 
 //
 // Map functions return a slice of KeyValue.
@@ -45,7 +55,7 @@ func workerReduceStage(reducef func(string, []string) string) {
 		if reduceCompleted {
 			break
 		}
-		prevJob = parseReduceFile(reduceID)
+		prevJob = parseReduceFile(reduceID, reducef)
 	}
 }
 
@@ -58,28 +68,50 @@ func getReduceJob(prevJob int) (int, bool) {
 
 	return reply.ReduceJob, reply.ReduceStageCompleted
 }
-func parseReduceFile(reduceID int) int {
-	// filename, jobID := job.Filename, job.JobId
-	// content, err := ioutil.ReadFile(filename)
-	// if err != nil {
-	// 	return -1
-	// }
+func parseReduceFile(reduceID int, reducef func(string, []string) string) int {
+	intermediateFileFormat := fmt.Sprintf("*-%d", reduceID)
+	files, err := filepath.Glob(intermediateFileFormat)
+	if err != nil {
+        log.Fatal(err)
+	}
+	intermediate := []KeyValue{}
+	for _, file := range files {
+		content, err := ioutil.ReadFile(file)
+		result := []KeyValue{}
+		if err != nil || json.Unmarshal(content, &result) != nil {
+			return -1
+		}
+		intermediate = append(intermediate, result...)
+	}
 
-	// table := make(map[int][]KeyValue)
-	
-	// kvs := mapf(filename, string(content))
-	// for _, kv := range kvs {
-	// 	reduceID := ihash(kv.Key) % nReduce
-	// 	table[reduceID] = append(table[reduceID], kv)
-	// }
+	sort.Sort(ByKey(intermediate))
 
-	// for id, kvs := range table {
-	// 	reduceFilename := generateIntermediateFileName(jobID, id)
-	// 	b, err := json.Marshal(kvs)
-	// 	if err != nil || ioutil.WriteFile(reduceFilename, b, 0644) != nil {
-	// 		return -1
-	// 	}
-	// }
+	oname := fmt.Sprintf("mr-out-%d", reduceID)
+	ofile, _ := os.Create(oname)
+
+	//
+	// call Reduce on each distinct key in intermediate[],
+	// and print the result to mr-out-0.
+	//
+	i := 0
+	for i < len(intermediate) {
+		j := i + 1
+		for j < len(intermediate) && intermediate[j].Key == intermediate[i].Key {
+			j++
+		}
+		values := []string{}
+		for k := i; k < j; k++ {
+			values = append(values, intermediate[k].Value)
+		}
+		output := reducef(intermediate[i].Key, values)
+
+		// this is the correct format for each line of Reduce output.
+		fmt.Fprintf(ofile, "%v %v\n", intermediate[i].Key, output)
+
+		i = j
+	}
+
+	ofile.Close()
 
 	return reduceID
 }

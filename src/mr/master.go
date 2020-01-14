@@ -7,6 +7,7 @@ import "net/rpc"
 import "net/http"
 import "fmt"
 import "time"
+// import "sync"
 
 var timeout time.Duration = 5
 
@@ -34,21 +35,22 @@ type Master struct {
 // Map RPC handler.
 //
 func (m *Master) RequestReduceJob(req *MRRequest, reply *RReply) error {
+	// TODO write reduce job. Very similar to above.
 	if prevJob := req.PrevCompletedJob; prevJob != -1 {
-		m.reduceJobStatus[prevJob] = true
+		m.reduceJobStatus[prevJob] = true // TODO Need to semaphore this
 	}
 	for {
 		select { 
 		case reduceJob, ok := <-m.reduceJobs:
 			if ok {
 				fmt.Printf("Value %v was read.\n", reduceJob)
-				reply.ReduceJob= reduceJob
+				reply.ReduceJob = reduceJob
 				// if after timeout, resend work
 				go func(reduceJob int, m *Master) {
 					time.Sleep(timeout * time.Second)
 					if m.reduceJobStatus[reduceJob] {
 						m.reduceCompletedCount <- 1
-						if len(m.reduceCompletedCount) >= m.jobCount { // scary part as we didnt mutex this, but reducecount can never go above jobcount.
+						if len(m.reduceCompletedCount) >= m.nReduce { // scary part as we didnt mutex this, but reducecount can never go above jobcount.
 							fmt.Println("Closing channel!")
 							// TODO we can consider clearing master resources for use in reduce.
 							close(m.reduceJobs)
@@ -76,7 +78,6 @@ func (m *Master) RequestReduceJob(req *MRRequest, reply *RReply) error {
 // Reduce RPC handler.
 //
 func (m *Master) RequestMapJob(req *MRRequest, reply *MRReply) error {
-	// TODO write reduce job. Very similar to above.
 
 	if req.PrevCompletedJob != -1 {
 		m.mapJobStatus[req.PrevCompletedJob] = true
@@ -122,6 +123,7 @@ func (m *Master) RequestMapJob(req *MRRequest, reply *MRReply) error {
 // start a thread that listens for RPCs from worker.go
 //
 func (m *Master) server() {
+	fmt.Println("printing shit")
 	rpc.Register(m)
 	rpc.HandleHTTP()
 	//l, e := net.Listen("tcp", ":1234")
@@ -138,8 +140,7 @@ func (m *Master) server() {
 // if the entire job has finished.
 //
 func (m *Master) Done() bool {
-	// TODO
-	return len(m.mapCompletedCount) >= m.jobCount
+	return len(m.reduceCompletedCount) >= m.nReduce
 }
 
 //
@@ -147,13 +148,17 @@ func (m *Master) Done() bool {
 //
 func MakeMaster(files []string, nReduce int) *Master {
 	m := Master{
-		c: make(chan Job, len(files)),
 		nReduce: nReduce,
+		c: make(chan Job, len(files)),
 		mapJobStatus: make(map[int]bool),
 		jobCount: len(files),
 		mapCompletedCount: make(chan int, len(files)),
-	}
 
+		reduceJobs: make(chan int, nReduce),
+		reduceJobStatus: make(map[int]bool),
+		reduceCompletedCount: make(chan int, nReduce),
+	}
+	
 	// Set up work for map stage.
 	for id, file := range files {
 		m.c <- Job{Filename: file, JobId: id}
