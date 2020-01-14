@@ -28,6 +28,10 @@ type KeyValue struct {
 	Value string
 }
 
+type WorkerEnv struct {
+	nReduce int
+}
+
 //
 // use ihash(key) % NReduce to choose the reduce
 // task number for each KeyValue emitted by Map.
@@ -40,10 +44,76 @@ func ihash(key string) int {
 
 func Worker(mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string) {
-		fmt.Println("Worker starting map stage!")
-		workerMapStage(mapf)
-		fmt.Println("Worker starting reduce stage!")
+		w := getWorkerEnv()
+		workerMapStage(w, mapf)
 		workerReduceStage(reducef)
+}
+
+func getWorkerEnv() *WorkerEnv {
+	req := SetupWorkerReq{}
+	reply := SetupWorkerReply{}
+	
+	// send the RPC request, wait for the reply.
+	call("Master.GetWorkerEnv", &req, &reply)
+	
+	w := WorkerEnv{nReduce: reply.NReduce}
+	return &w
+}
+
+func workerMapStage(worker *WorkerEnv, mapf func(string, string) []KeyValue) {
+	prevJob := -1
+	for {
+		job, mapCompleted := getMapJob(prevJob)
+		if mapCompleted {
+			break
+		}
+		prevJob = parseMapFile(job, worker.nReduce, mapf)
+	}
+}
+
+func getMapJob(previousJob int) (Job, bool) {
+	req := MRRequest{PrevCompletedJob: previousJob}
+	reply := MRReply{}
+	
+	// send the RPC request, wait for the reply.
+	call("Master.RequestMapJob", &req, &reply)
+
+	return reply.Job, reply.MapStageCompleted
+}
+
+// given job and map function, create an auxilary file and write intermediate 
+// result to it.
+func parseMapFile(job Job, nReduce int, mapf func(string, string) []KeyValue) int {
+	filename, jobID := job.Filename, job.JobId
+	content, err := ioutil.ReadFile(filename)
+	if err != nil {
+		return -1
+	}
+
+	table := make(map[int][]KeyValue)
+	
+	kvs := mapf(filename, string(content))
+	for _, kv := range kvs {
+		reduceID := ihash(kv.Key) % nReduce
+		table[reduceID] = append(table[reduceID], kv)
+	}
+
+	for id, kvs := range table {
+		reduceFilename := generateIntermediateFileName(jobID, id)
+		b, err := json.Marshal(kvs)
+		if err != nil || ioutil.WriteFile(reduceFilename, b, 0666) != nil {
+			return -1
+		}
+	}
+
+	return jobID
+}
+
+func generateIntermediateFileName(jobID int, reduceID int) string {
+	filename := fmt.Sprintf("mri-%d-%d", jobID, reduceID)
+	os.Remove(filename) // Remove file in case the job is from a recovery task.
+	os.Create(filename)
+	return filename
 }
 
 func workerReduceStage(reducef func(string, []string) string) {
@@ -67,11 +137,11 @@ func getReduceJob(prevJob int) (int, bool) {
 	return reply.ReduceJob, reply.ReduceStageCompleted
 }
 func parseReduceFile(reduceID int, reducef func(string, []string) string) int {
-	print("Starting reduce job")
-	intermediateFileFormat := fmt.Sprintf("*-%d", reduceID)
+	intermediateFileFormat := fmt.Sprintf("mri-*-%d", reduceID)
 	files, err := filepath.Glob(intermediateFileFormat)
 	if err != nil {
-        log.Fatal(err)
+		log.Fatal(err)
+		return -1
 	}
 	intermediate := []KeyValue{}
 	for _, file := range files {
@@ -81,8 +151,7 @@ func parseReduceFile(reduceID int, reducef func(string, []string) string) int {
 			return -1
 		}
 		if res := json.Unmarshal(content, &result); res != nil {
-			fmt.Println("something fucked up", res)
-			fmt.Println("Reduce job %d failed", reduceID)
+			return -1
 		}
 		intermediate = append(intermediate, result...)
 	}
@@ -114,66 +183,7 @@ func parseReduceFile(reduceID int, reducef func(string, []string) string) int {
 	}
 
 	ofile.Close()
-	fmt.Printf("Reduce job %d completed\n", reduceID)
 	return reduceID
-}
-
-func workerMapStage(mapf func(string, string) []KeyValue) {
-	prevJob := -1
-	for {
-		job, mapCompleted, nReduce := getMapJob(prevJob)
-		if mapCompleted {
-			break
-		}
-		prevJob = parseMapFile(job, nReduce, mapf)
-	}
-}
-
-// GetJob retrieve a filename from the master.
-func getMapJob(previousJob int) (Job, bool, int) {
-	req := MRRequest{PrevCompletedJob: previousJob}
-	reply := MRReply{}
-	
-	// send the RPC request, wait for the reply.
-	call("Master.RequestMapJob", &req, &reply)
-
-	return reply.Job, reply.MapStageCompleted, reply.NReduce
-}
-
-// given job and map function, create an auxilary file and write intermediate 
-// result to it.
-func parseMapFile(job Job, nReduce int, mapf func(string, string) []KeyValue) int {
-	filename, jobID := job.Filename, job.JobId
-	content, err := ioutil.ReadFile(filename)
-	if err != nil {
-		return -1
-	}
-
-	table := make(map[int][]KeyValue)
-	
-	kvs := mapf(filename, string(content))
-	for _, kv := range kvs {
-		reduceID := ihash(kv.Key) % nReduce
-		table[reduceID] = append(table[reduceID], kv)
-	}
-
-	for id, kvs := range table {
-		reduceFilename := generateIntermediateFileName(jobID, id)
-		b, err := json.Marshal(kvs)
-		if err != nil || ioutil.WriteFile(reduceFilename, b, 0666) != nil {
-			fmt.Println(err, "ORRORORRO")
-			return -1
-		}
-	}
-
-	return jobID
-}
-
-func generateIntermediateFileName(jobID int, reduceID int) string {
-	filename := fmt.Sprintf("mr-%d-%d", jobID, reduceID)
-	os.Remove(filename)
-	os.Create(filename)
-	return filename
 }
 
 //

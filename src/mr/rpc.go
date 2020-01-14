@@ -4,6 +4,15 @@ package mr
 // RPC definitions.
 //
 
+type SetupWorkerReq struct {
+	
+}
+
+type SetupWorkerReply struct {
+	NReduce int
+}
+
+
 type MRRequest struct {
 	PrevCompletedJob int
 }
@@ -12,7 +21,6 @@ type MRRequest struct {
 type MRReply struct {
 	Job Job
 	MapStageCompleted bool
-	NReduce int
 }
 
 type RReply struct {
