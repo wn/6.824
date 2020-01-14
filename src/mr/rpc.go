@@ -10,6 +10,7 @@ type SetupWorkerReq struct {
 
 type SetupWorkerReply struct {
 	NReduce int
+	MapCount int
 }
 
 

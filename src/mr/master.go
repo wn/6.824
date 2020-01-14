@@ -7,6 +7,7 @@ import "net/rpc"
 import "net/http"
 import "time"
 import "sync"
+import "fmt"
 
 var timeout time.Duration = 5
 
@@ -32,6 +33,7 @@ type Master struct {
 
 func (m *Master) GetWorkerEnv(req *SetupWorkerReq, reply *SetupWorkerReply) error {
 	reply.NReduce = m.nReduce
+	reply.MapCount = m.jobCount
 	return nil
 }
 
@@ -45,25 +47,31 @@ func (m *Master) RequestReduceJob(req *MRRequest, reply *RReply) error {
 		for {
 			select { 
 			case reduceJob, ok := <-m.reduceJobs:
+				fmt.Println("stuck here")
 				if ok {
 					reply.ReduceJob = reduceJob
+					fmt.Println("issued job", reduceJob)
 					// if after timeout, resend work
 					go func(reduceJob int, m *Master) {
 						time.Sleep(timeout * time.Second)
 						if _, ok := m.reduceJobStatus.Load(reduceJob); ok {
 							m.reduceCompletedCount <- 1 // Just a dummy number.
 							if len(m.reduceCompletedCount) == m.nReduce {
+								fmt.Println("aoeuaoeua")
 								close(m.reduceJobs)
 							}
 						} else {
 							m.reduceJobs <- reduceJob
 						}
 					}(reduceJob, m)
-				} else {
-					// Signal to slaves to end Map Stage.
-					reply.ReduceStageCompleted = true
+					return nil
 				}
-				return nil
+				if len(m.reduceCompletedCount) == m.nReduce {
+					// Signal to slaves to end Map Stage.
+					fmt.Println("aqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqoeuaoeua")
+					reply.ReduceStageCompleted = true
+					return nil
+				}
 			default:
 				time.Sleep(time.Second) // Sleep so that we don't waste compute power.
 			}
@@ -98,7 +106,8 @@ func (m *Master) RequestMapJob(req *MRRequest, reply *MRReply) error {
 						m.mapJobs <- job
 					}
 				}(job, m)
-			} else {
+			}
+			if len(m.mapCompletedCount) == m.jobCount {
 				// Signal to slaves to end Map Stage.
 				reply.MapStageCompleted = true
 			}
