@@ -1,13 +1,14 @@
 package mr
 
-import "log"
+import (
+	"log"
+)
 import "net"
 import "os"
 import "net/rpc"
 import "net/http"
 import "time"
 import "sync"
-import "fmt"
 
 var timeout time.Duration = 5
 
@@ -47,17 +48,14 @@ func (m *Master) RequestReduceJob(req *MRRequest, reply *RReply) error {
 		for {
 			select { 
 			case reduceJob, ok := <-m.reduceJobs:
-				fmt.Println("stuck here")
 				if ok {
 					reply.ReduceJob = reduceJob
-					fmt.Println("issued job", reduceJob)
 					// if after timeout, resend work
 					go func(reduceJob int, m *Master) {
 						time.Sleep(timeout * time.Second)
 						if _, ok := m.reduceJobStatus.Load(reduceJob); ok {
 							m.reduceCompletedCount <- 1 // Just a dummy number.
 							if len(m.reduceCompletedCount) == m.nReduce {
-								fmt.Println("aoeuaoeua")
 								close(m.reduceJobs)
 							}
 						} else {
@@ -68,7 +66,6 @@ func (m *Master) RequestReduceJob(req *MRRequest, reply *RReply) error {
 				}
 				if len(m.reduceCompletedCount) == m.nReduce {
 					// Signal to slaves to end Map Stage.
-					fmt.Println("aqqqqqqqqqqqqqqqqqqqqqqqqqqqqqqoeuaoeua")
 					reply.ReduceStageCompleted = true
 					return nil
 				}
@@ -88,8 +85,6 @@ func (m *Master) RequestMapJob(req *MRRequest, reply *MRReply) error {
 		m.mapJobStatus.Store(prevJob, true)
 	}
 	for {
-		// Code below copied from: 
-		// https://stackoverflow.com/questions/3398490/checking-if-a-channel-has-a-ready-to-read-value-using-go
 		select { 
 		case job, ok := <-m.mapJobs:
 			if ok {
